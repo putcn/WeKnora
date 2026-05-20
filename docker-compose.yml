@@ -549,9 +549,8 @@ services:
   #   docker compose --profile full up -d          # full stack 已包含
   #
   # GPU 模式：
-  #   1. docker build -f rerank/Dockerfile.cuda -t weknora-rerank:cuda ./rerank
-  #   2. 在 .env 中设置 RERANK_DEVICE=cuda  RERANK_IMAGE=weknora-rerank:cuda
-  #   3. 取消下方 deploy.resources.reservations 的注释
+  #   1. 在 .env 中设置 RERANK_DEVICE=cuda
+  #   2. 取消下方 deploy.resources.reservations 的注释
   #
   # WeKnora 控制台配置：
   #   Settings → Model Providers → Rerank
@@ -561,7 +560,7 @@ services:
   rerank:
     image: ${RERANK_IMAGE:-weknora-rerank:cpu}
     build:
-      context: ./rerank
+      context: ./reranker
       dockerfile: Dockerfile
       args:
         - MODEL_NAME=${RERANK_MODEL:-maidalun1020/bce-reranker-base_v1}
