@@ -540,7 +540,23 @@ services:
   # Rerank 推理服务（bce-reranker-base_v1，OpenAI API 兼容）
   #
   # 提供开箱即用的本地 Rerank 能力，支持 CPU（默认）和 GPU（CUDA）两种模式。
-  # 模型在镜像构建时下载，容器启动即可服务，无需额外配置。
+  # 模型在首次构建镜像时从 HuggingFace 下载并缓存进镜像层，容器启动即可服务。
+  #
+  # ┌─────────────────────────────────────────────────────────────────────┐
+  # │  local-deploy-full 分支说明（无 GPU 本地部署）                       │
+  # │                                                                     │
+  # │  本分支目标：在无 GPU 的 Linux 服务器上零配置运行 --profile full。   │
+  # │  因此 rerank 服务做了以下限定：                                      │
+  # │    1. RERANK_DEVICE=cpu   —— 强制 CPU 推理，不依赖 CUDA 驱动         │
+  # │    2. RERANK_IMAGE=weknora-rerank:cpu —— CPU-only PyTorch 镜像      │
+  # │    3. deploy.resources.reservations 保持注释 —— 无 GPU 声明不报错   │
+  # │                                                                     │
+  # │  如需启用 GPU：                                                      │
+  # │    Step 1  用 CUDA PyTorch 重新 build 镜像（见 reranker/README.md） │
+  # │    Step 2  取消下方 deploy 块注释                                    │
+  # │    Step 3  在 .env 设置 RERANK_IMAGE=weknora-rerank:cuda            │
+  # │             和 RERANK_DEVICE=cuda                                   │
+  # └─────────────────────────────────────────────────────────────────────┘
   #
   # 端口：RERANK_PORT（默认 8001，避免与其他服务冲突）
   #
@@ -548,12 +564,8 @@ services:
   #   docker compose --profile rerank up -d        # 仅启动 rerank
   #   docker compose --profile full up -d          # full stack 已包含
   #
-  # GPU 模式：
-  #   1. 在 .env 中设置 RERANK_DEVICE=cuda
-  #   2. 取消下方 deploy.resources.reservations 的注释
-  #
   # WeKnora 控制台配置：
-  #   Settings → Model Providers → Rerank
+  #   Settings → Model Providers → 类型选 Jina
   #   API URL: http://rerank:8000（容器内访问）
   #   Model:   bce-reranker-base_v1
   # ---------------------------------------------------------------------------
@@ -569,6 +581,8 @@ services:
     ports:
       - "${RERANK_PORT:-8001}:8000"
     environment:
+      # local-deploy-full 分支：RERANK_DEVICE 默认锁定为 cpu，无需 NVIDIA 驱动。
+      # 若宿主机有 GPU，完成 reranker/README.md 中「GPU 模式三步」后改为 cuda。
       - DEVICE=${RERANK_DEVICE:-cpu}
       - MODEL_NAME=${RERANK_MODEL:-maidalun1020/bce-reranker-base_v1}
       - MAX_LENGTH=${RERANK_MAX_LENGTH:-512}
@@ -586,6 +600,7 @@ services:
       - WeKnora-network
     restart: unless-stopped
     # --- GPU 模式：取消以下注释并设置 RERANK_IMAGE=weknora-rerank:cuda ---
+    # --- local-deploy-full 分支故意保持注释，确保无 GPU 环境不报错     ---
     # deploy:
     #   resources:
     #     reservations:
