@@ -172,9 +172,6 @@ services:
       - WEKNORA_AGENT_LLM_TIMEOUT=${WEKNORA_AGENT_LLM_TIMEOUT:-}
       - WEKNORA_AGENT_TOOL_APPROVAL_TIMEOUT=${WEKNORA_AGENT_TOOL_APPROVAL_TIMEOUT:-}
       # Tenant / RBAC（详见 docs/rbac.md 与 .env.example 注释）
-      # - WEKNORA_TENANT_ENABLE_RBAC: 是否启用租户角色强制鉴权（true / false），默认 true
-      # - WEKNORA_TENANT_MAX_OWNED_PER_USER: 单个非超管自助创建租户的上限
-      #   >0 强制限额；=0 走 handler 默认；<0 关闭限额（不建议共享部署使用）
       - WEKNORA_TENANT_ENABLE_RBAC=${WEKNORA_TENANT_ENABLE_RBAC:-}
       - WEKNORA_TENANT_MAX_OWNED_PER_USER=${WEKNORA_TENANT_MAX_OWNED_PER_USER:-}
       - APK_MIRROR_ARG=${APK_MIRROR_ARG:-}
@@ -266,12 +263,11 @@ services:
       - WeKnora-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
-      interval: 10s # 增加时间间隔
-      timeout: 10s # 增加超时时间
-      retries: 3 # 减少重试次数，让失败更快反馈
-      start_period: 30s # 给予初始启动更多时间
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
-    # 添加停机时的优雅退出时间
     stop_grace_period: 1m
 
   redis:
@@ -313,10 +309,6 @@ services:
     environment:
       - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-8888}/
       - INSTANCE_NAME=weknora-searxng
-      # Default value lets `docker compose --profile searxng up` work zero-config.
-      # Override via .env (e.g. `openssl rand -hex 32`) before exposing the
-      # instance beyond the default 127.0.0.1 bind, since secret_key signs
-      # image-proxy URLs and a shared default would be guessable by anyone.
       - SEARXNG_SECRET=${SEARXNG_SECRET:-weknora-default-searxng-secret-rotate-before-exposing-publicly}
     cap_drop:
       - ALL
@@ -361,20 +353,20 @@ services:
     image: jaegertracing/all-in-one:1.76.0
     container_name: WeKnora-jaeger
     ports:
-      - "6831:6831/udp" # Jaeger Thrift接收器
-      - "6832:6832/udp" # Jaeger Thrift接收器(Compact)
-      - "5778:5778" # 配置端口
-      - "16686:16686" # Web UI
-      - "4317:4317" # OTLP gRPC接收器
-      - "4318:4318" # OTLP HTTP接收器
-      - "14250:14250" # 接收模型端口
-      - "14268:14268" # Jaeger HTTP接收器
-      - "9411:9411" # Zipkin兼容性端口
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+      - "14250:14250"
+      - "14268:14268"
+      - "9411:9411"
     environment:
       - COLLECTOR_OTLP_ENABLED=true
       - COLLECTOR_ZIPKIN_HOST_PORT=:9411
     volumes:
-      - jaeger_data:/var/lib/jaeger # 持久化 Jaeger 数据
+      - jaeger_data:/var/lib/jaeger
     networks:
       - WeKnora-network
     restart: unless-stopped
@@ -471,19 +463,6 @@ services:
 
   # ---------------------------------------------------------------------------
   # Apache Doris 4.1（FE + BE 单实例 standalone 部署，opt-in via `--profile doris`）
-  #
-  # 版本要求：必须 >= 3.0（HNSW ANN 索引、cosine_distance_approximate、
-  # Stream Load partial_columns）。本 compose 使用 4.1 官方稳定 tag。
-  #
-  # 端口说明：
-  #   - 9030 (FE MySQL)：WeKnora 主链路读写、SQL 查询都走此端口。
-  #   - 8030 (FE HTTP)：Stream Load partial update 入口。
-  #   - 8040 (BE)     ：BE 心跳与数据传输；FE 会把 stream load 重定向到 BE。
-  #
-  # 启用方式：
-  #   docker compose --profile doris up -d
-  #
-  # 数据持久化在 doris_fe_data / doris_be_data 卷中。
   # ---------------------------------------------------------------------------
   doris-fe:
     image: apache/doris:fe-4.1.0
@@ -543,22 +522,20 @@ services:
   # 模型在首次构建镜像时从 HuggingFace 下载并缓存进镜像层，容器启动即可服务。
   #
   # ┌─────────────────────────────────────────────────────────────────────┐
-  # │  local-deploy-full 分支说明（无 GPU 本地部署）                       │
+  # │  local-deploy-full 分支说明（GPU 模式，已在本地构建 CUDA 镜像）          │
   # │                                                                     │
-  # │  本分支目标：在无 GPU 的 Linux 服务器上零配置运行 --profile full。   │
-  # │  因此 rerank 服务做了以下限定：                                      │
-  # │    1. RERANK_DEVICE=cpu   —— 强制 CPU 推理，不依赖 CUDA 驱动         │
-  # │    2. RERANK_IMAGE=weknora-rerank:cpu —— CPU-only PyTorch 镜像      │
-  # │    3. deploy.resources.reservations 保持注释 —— 无 GPU 声明不报错   │
+  # │  当前配置：RERANK_IMAGE=weknora-rerank:cuda, RERANK_DEVICE=cuda     │
+  # │  前提：已执行 docker build ... -t weknora-rerank:cuda ./reranker    │
+  # │  宿主机须安装 nvidia-container-toolkit 并重启 docker daemon         │
   # │                                                                     │
-  # │  如需启用 GPU：                                                      │
-  # │    Step 1  用 CUDA PyTorch 重新 build 镜像（见 reranker/README.md） │
-  # │    Step 2  取消下方 deploy 块注释                                    │
-  # │    Step 3  在 .env 设置 RERANK_IMAGE=weknora-rerank:cuda            │
-  # │             和 RERANK_DEVICE=cuda                                   │
+  # │  如需回退到 CPU 模式：                                                │
+  # │    1. 在 .env 中改回 RERANK_IMAGE=weknora-rerank:cpu               │
+  # │       和 RERANK_DEVICE=cpu                                          │
+  # │    2. 将下方 deploy 块重新注释                                        │
+  # │    3. docker compose --profile full up -d rerank                   │
   # └─────────────────────────────────────────────────────────────────────┘
   #
-  # 端口：RERANK_PORT（默认 8001，避免与其他服务冲突）
+  # 端口：RERANK_PORT（默认 8001）
   #
   # 启用方式：
   #   docker compose --profile rerank up -d        # 仅启动 rerank
@@ -581,8 +558,8 @@ services:
     ports:
       - "${RERANK_PORT:-8001}:8000"
     environment:
-      # local-deploy-full 分支：RERANK_DEVICE 默认锁定为 cpu，无需 NVIDIA 驱动。
-      # 若宿主机有 GPU，完成 reranker/README.md 中「GPU 模式三步」后改为 cuda。
+      # local-deploy-full 分支：已切换为 GPU 模式（RERANK_DEVICE=cuda in .env）。
+      # 回退 CPU 模式：将 .env 中 RERANK_DEVICE 改回 cpu 并注释下方 deploy 块。
       - DEVICE=${RERANK_DEVICE:-cpu}
       - MODEL_NAME=${RERANK_MODEL:-maidalun1020/bce-reranker-base_v1}
       - MAX_LENGTH=${RERANK_MAX_LENGTH:-512}
@@ -599,39 +576,23 @@ services:
     networks:
       - WeKnora-network
     restart: unless-stopped
-    # --- GPU 模式：取消以下注释并设置 RERANK_IMAGE=weknora-rerank:cuda ---
-    # --- local-deploy-full 分支故意保持注释，确保无 GPU 环境不报错     ---
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    # --- GPU 模式：local-deploy-full 分支已取消注释，使用 weknora-rerank:cuda 镜像 ---
+    # --- 回退 CPU：重新注释此 deploy 块并改 .env 中 RERANK_IMAGE/RERANK_DEVICE    ---
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     profiles:
       - rerank
       - full
 
   # ---------------------------------------------------------------------------
   # Langfuse 自建可观测栈 (opt-in via `--profile langfuse`)
-  #
-  # 为了最小化资源占用，Langfuse 会复用 WeKnora 已有的 postgres 和 redis：
-  #   - postgres：在 WeKnora-postgres 中创建独立的 "langfuse" 数据库
-  #   - redis  ：复用 WeKnora-redis 的 DB 1（WeKnora 自己用 DB 0）
-  # 需要新增的只有 Langfuse 应用自身 + ClickHouse（OLAP）+ 专用 MinIO（事件/媒体 S3）。
-  #
-  # 启用方式：
-  #   docker compose --profile langfuse up -d
-  # 启用后：
-  #   1. Langfuse UI: http://localhost:3000 （首次访问注册管理员并在 Settings → API Keys 生成 key）
-  #   2. 在 .env 里把 LANGFUSE_HOST 改成 http://langfuse-web:3000（容器间通信）
-  #      并填入刚生成的 LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY
-  #   3. 重启 app 容器：docker compose up -d app
-  # 相关默认密码已写成占位符，生产部署务必用 openssl rand 重新生成！
   # ---------------------------------------------------------------------------
 
-  # 一次性初始化脚本：在已有的 WeKnora-postgres 里创建 langfuse 数据库（幂等，数据库已存在则跳过）
-  # 复用 WeKnora-postgres 的 ParadeDB 镜像，避免多拉一个 postgres 镜像
   langfuse-db-init:
     image: paradedb/paradedb:v0.22.2-pg17
     container_name: WeKnora-langfuse-db-init
@@ -640,17 +601,13 @@ services:
         condition: service_healthy
     environment:
       PGPASSWORD: ${DB_PASSWORD}
-    # ${LANGFUSE_DB_NAME:-langfuse} / ${DB_USER} 由 compose 解析成字面量后再传给 shell；
-    # 脚本中需要 shell 自己展开的变量（无）一律用 $$ 转义。
     entrypoint: ["sh", "-c"]
     command:
       - |
         set -e
         echo "[langfuse-db-init] ensuring database '${LANGFUSE_DB_NAME:-langfuse}' exists in WeKnora-postgres..."
-        # 先刷新现有库的 collation（镜像 ICU 2.36 与宿主 2.41 不匹配时必须做），否则 CREATE DATABASE 会失败
         psql -h postgres -U ${DB_USER} -d postgres -v ON_ERROR_STOP=0 -c "ALTER DATABASE template1 REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
         psql -h postgres -U ${DB_USER} -d postgres -v ON_ERROR_STOP=0 -c "ALTER DATABASE postgres REFRESH COLLATION VERSION;" >/dev/null 2>&1 || true
-        # 幂等创建：已存在则跳过；不存在则从 template0 克隆（template0 永远不会有 collation 漂移）
         if psql -h postgres -U ${DB_USER} -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${LANGFUSE_DB_NAME:-langfuse}'" | grep -q 1; then
           echo "[langfuse-db-init] database '${LANGFUSE_DB_NAME:-langfuse}' already exists, skipping."
         else
@@ -694,15 +651,12 @@ services:
     container_name: WeKnora-langfuse-minio
     restart: unless-stopped
     entrypoint: sh
-    # 启动前创建 `langfuse` 桶，Langfuse 开箱即用
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
     environment:
       MINIO_ROOT_USER: ${LANGFUSE_MINIO_USER:-langfuseminio}
       MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_PASSWORD:-langfuseminiosecret}
     ports:
-      # 9100：S3 API（浏览器上传媒体时会直连此端口，必须对外暴露）
       - "${LANGFUSE_MINIO_S3_PORT:-9100}:9000"
-      # 9101：MinIO 控制台（可选，方便排障）
       - "${LANGFUSE_MINIO_CONSOLE_PORT:-9101}:9001"
     volumes:
       - langfuse_minio_data:/data
@@ -722,7 +676,6 @@ services:
     container_name: WeKnora-langfuse-worker
     restart: unless-stopped
     depends_on: &langfuse-depends-on
-      # 复用 WeKnora 已有的 postgres/redis，需要先完成 langfuse 数据库的创建
       langfuse-db-init:
         condition: service_completed_successfully
       redis:
@@ -731,10 +684,6 @@ services:
         condition: service_healthy
       langfuse-minio:
         condition: service_healthy
-    # 用 wrapper entrypoint：在容器启动时把 DB_PASSWORD / REDIS_PASSWORD 做 URL 编码，
-    # 避免 DB_PASSWORD 含 '@' / '#' 等字符导致 Prisma 无法解析 DATABASE_URL (P1013)。
-    # Langfuse 镜像基于 Node.js，直接用 node 的 encodeURIComponent，不引外部依赖。
-    # 注意：compose 覆盖 entrypoint 会清空镜像默认 CMD，因此在 wrapper 末尾写死 exec 的原始命令。
     entrypoint:
       - /bin/sh
       - -ec
@@ -748,15 +697,11 @@ services:
         unset _LF_DB_USER _LF_DB_PASSWORD _LF_REDIS_PASSWORD
         exec dumb-init -- ./worker/entrypoint.sh node worker/dist/index.js
     environment: &langfuse-env
-      # 原始凭证（未 URL 编码），由 entrypoint wrapper 读取并组装成 DATABASE_URL / REDIS_CONNECTION_STRING
       _LF_DB_USER: ${DB_USER}
       _LF_DB_PASSWORD: ${DB_PASSWORD}
       _LF_DB_NAME: ${LANGFUSE_DB_NAME:-langfuse}
       _LF_REDIS_PASSWORD: ${REDIS_PASSWORD}
       _LF_REDIS_DB: ${LANGFUSE_REDIS_DB:-1}
-      # SALT / ENCRYPTION_KEY 生产环境务必重新生成：
-      #   SALT: openssl rand -base64 32
-      #   ENCRYPTION_KEY: openssl rand -hex 32
       SALT: ${LANGFUSE_SALT:-weknora-langfuse-dev-salt-change-me}
       ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
       NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3000}
@@ -779,7 +724,6 @@ services:
       LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
       LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:-langfuseminio}
       LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:-langfuseminiosecret}
-      # 媒体上传用的外部 endpoint（浏览器直连），默认指向宿主机映射的 9100 端口
       LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: ${LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT:-http://localhost:9100}
       LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
       LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
@@ -796,7 +740,6 @@ services:
     depends_on: *langfuse-depends-on
     ports:
       - "${LANGFUSE_WEB_PORT:-3000}:3000"
-    # 同样走 wrapper entrypoint，末尾写死 web 的原始启动命令（见镜像 Dockerfile 的 CMD）
     entrypoint:
       - /bin/sh
       - -ec
@@ -815,7 +758,6 @@ services:
         fi
     environment:
       <<: *langfuse-env
-      # 可选：首次启动时自动创建组织、项目和管理员（填了就不用在 UI 上手动注册）
       LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-}
       LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-}
       LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-}

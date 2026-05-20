@@ -8,39 +8,42 @@
 
 > 本节仅适用于 **`local-deploy-full`** 分支，主分支或其他分支请忽略。
 
-### 设计目标
+### 当前配置：GPU 模式
 
-`local-deploy-full` 分支的目标是在**无 GPU 的 Linux 服务器**上通过 `docker compose --profile full` 一键拉起全栈，rerank 服务是其中的一个组件。为此，本分支对 rerank 做了以下约束：
+`local-deploy-full` 分支已切换为 **GPU 模式**，前提是已在本地完成 CUDA 镜像构建（见下方 [GPU 模式](#gpu-模式需要三步缺一不可) 章节）。当前生效配置：
 
-| 设置项 | 本分支默认值 | 说明 |
-|--------|------------|------|
-| `RERANK_DEVICE` | `cpu` | 强制 CPU 推理，不依赖 NVIDIA 驱动或 CUDA 工具链 |
-| `RERANK_IMAGE` | `weknora-rerank:cpu` | 使用 CPU-only PyTorch 镜像，体积更小，构建无需 CUDA |
-| docker-compose GPU 资源声明 | 注释掉 | `deploy.resources.reservations` 块保持注释，确保无 GPU 环境不报错 |
+| 设置项 | 当前值 | 说明 |
+|--------|--------|------|
+| `RERANK_DEVICE` | `cuda` | GPU 推理，需 NVIDIA 驱动和 nvidia-container-toolkit |
+| `RERANK_IMAGE` | `weknora-rerank:cuda` | 含 CUDA PyTorch 的本地构建镜像 |
+| docker-compose GPU 资源声明 | **已取消注释** | `deploy.resources.reservations` 块已启用 |
 
-### 快速启动（无 GPU）
+### 快速启动（GPU）
 
 ```bash
-# 在 local-deploy-full 分支，直接用 full profile 启动即可
-docker compose --profile full up -d
+# 确认本地已构建 CUDA 镜像：
+docker images | grep weknora-rerank
+# 应看到 weknora-rerank:cuda
 
-# 若只想单独测试 rerank：
-docker compose --profile rerank up -d rerank
+# 启动全栈：
+docker compose --profile full up -d
 ```
 
-无需任何额外配置，rerank 服务会以 CPU 模式启动，首次运行时 Docker 会自动 build 镜像并从 HuggingFace 下载模型（约 1 GB）。
+### 回退到 CPU 模式
 
-### 国内镜像加速
-
-如果下载模型较慢，在 `.env` 中加入：
+如需在无 GPU 的机器上运行，修改 `.env`：
 
 ```env
-RERANK_HF_MIRROR=https://hf-mirror.com
+RERANK_IMAGE=weknora-rerank:cpu
+RERANK_DEVICE=cpu
 ```
 
-### 升级到 GPU 模式
+并将 `docker-compose.yml` 中 `rerank` service 的 `deploy` 块重新注释，然后重新 build CPU 镜像：
 
-如果后续服务器配备了 GPU，升级步骤见下方 [GPU 模式](#gpu-模式需要三步缺一不可) 小节。升级后需将 `.env` 中的 `RERANK_DEVICE` 改回 `cuda` 并重新 build 镜像。
+```bash
+docker build -t weknora-rerank:cpu ./reranker
+docker compose --profile full up -d rerank
+```
 
 ---
 
@@ -77,7 +80,7 @@ POST /rerank
       "document": { "text": "doc2" }
     }
   ],
-  "meta": { "elapsed_seconds": 0.042, "device": "cpu" }
+  "meta": { "elapsed_seconds": 0.012, "device": "cuda" }
 }
 ```
 
@@ -147,7 +150,7 @@ docker compose --profile rerank up -d rerank
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `RERANK_MODEL` | `maidalun1020/bce-reranker-base_v1` | HuggingFace 模型 ID |
-| `RERANK_DEVICE` | `cpu` | `auto` / `cpu` / `cuda` / `cuda:0`。**GPU 模式仅在第一、二步完成后有效**。`local-deploy-full` 分支默认锁定为 `cpu` |
+| `RERANK_DEVICE` | `cpu` | `auto` / `cpu` / `cuda` / `cuda:0`。**GPU 模式仅在第一、二步完成后有效** |
 | `RERANK_MAX_LENGTH` | `512` | 输入最大 token 长度 |
 | `RERANK_PORT` | `8001` | 宿主机映射端口（容器内始终监听 8000）|
 | `RERANK_IMAGE` | `weknora-rerank:cpu` | 使用的镜像名，GPU 模式需改为 `weknora-rerank:cuda` |
