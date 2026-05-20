@@ -1,0 +1,47 @@
+# =============================================================
+# WeKnora Rerank Server — CUDA variant
+# Build: docker build -f rerank/Dockerfile.cuda -t weknora-rerank:cuda rerank/
+# Requires NVIDIA Container Toolkit on the host.
+# =============================================================
+
+FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+
+ARG MODEL_NAME=maidalun1020/bce-reranker-base_v1
+ARG HF_MIRROR=https://huggingface.co
+
+ENV DEVICE=cuda \
+    MODEL_NAME=${MODEL_NAME} \
+    HF_ENDPOINT=${HF_MIRROR} \
+    TRANSFORMERS_CACHE=/app/model_cache \
+    HF_HOME=/app/model_cache \
+    PYTHONUNBUFFERED=1 \
+    PORT=8000
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-pip curl \
+    && ln -sf python3 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+RUN python - <<'EOF'
+import os
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+m = os.environ["MODEL_NAME"]
+print(f"[rerank] downloading {m} ...")
+AutoTokenizer.from_pretrained(m, cache_dir="/app/model_cache")
+AutoModelForSequenceClassification.from_pretrained(m, cache_dir="/app/model_cache")
+print("[rerank] model downloaded.")
+EOF
+
+COPY server.py ./
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/health || exit 1
+
+CMD ["python", "server.py"]
