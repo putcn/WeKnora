@@ -537,6 +537,68 @@ services:
       - full
 
   # ---------------------------------------------------------------------------
+  # Rerank 推理服务（bce-reranker-base_v1，OpenAI API 兼容）
+  #
+  # 提供开箱即用的本地 Rerank 能力，支持 CPU（默认）和 GPU（CUDA）两种模式。
+  # 模型在镜像构建时下载，容器启动即可服务，无需额外配置。
+  #
+  # 端口：RERANK_PORT（默认 8001，避免与其他服务冲突）
+  #
+  # 启用方式：
+  #   docker compose --profile rerank up -d        # 仅启动 rerank
+  #   docker compose --profile full up -d          # full stack 已包含
+  #
+  # GPU 模式：
+  #   1. docker build -f rerank/Dockerfile.cuda -t weknora-rerank:cuda ./rerank
+  #   2. 在 .env 中设置 RERANK_DEVICE=cuda  RERANK_IMAGE=weknora-rerank:cuda
+  #   3. 取消下方 deploy.resources.reservations 的注释
+  #
+  # WeKnora 控制台配置：
+  #   Settings → Model Providers → Rerank
+  #   API URL: http://rerank:8000（容器内访问）
+  #   Model:   bce-reranker-base_v1
+  # ---------------------------------------------------------------------------
+  rerank:
+    image: ${RERANK_IMAGE:-weknora-rerank:cpu}
+    build:
+      context: ./rerank
+      dockerfile: Dockerfile
+      args:
+        - MODEL_NAME=${RERANK_MODEL:-maidalun1020/bce-reranker-base_v1}
+        - HF_MIRROR=${RERANK_HF_MIRROR:-https://huggingface.co}
+    container_name: WeKnora-rerank
+    ports:
+      - "${RERANK_PORT:-8001}:8000"
+    environment:
+      - DEVICE=${RERANK_DEVICE:-cpu}
+      - MODEL_NAME=${RERANK_MODEL:-maidalun1020/bce-reranker-base_v1}
+      - MAX_LENGTH=${RERANK_MAX_LENGTH:-512}
+      - DEFAULT_TOP_N=${RERANK_DEFAULT_TOP_N:-0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # 国内镜像加速：HF_ENDPOINT=https://hf-mirror.com
+      - HF_ENDPOINT=${RERANK_HF_MIRROR:-https://huggingface.co}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - WeKnora-network
+    restart: unless-stopped
+    # --- GPU 模式：取消以下注释并设置 RERANK_IMAGE=weknora-rerank:cuda ---
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    profiles:
+      - rerank
+      - full
+
+  # ---------------------------------------------------------------------------
   # Langfuse 自建可观测栈 (opt-in via `--profile langfuse`)
   #
   # 为了最小化资源占用，Langfuse 会复用 WeKnora 已有的 postgres 和 redis：
