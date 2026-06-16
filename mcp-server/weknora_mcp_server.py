@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 # Configuration - Load from environment variables with defaults
 WEKNORA_BASE_URL = os.getenv("WEKNORA_BASE_URL", "http://localhost:8080/api/v1")
 WEKNORA_API_KEY = os.getenv("WEKNORA_API_KEY", "")
+# Optional: caller user ID injected by the host application (e.g. Fortbrain).
+# When set, every API request will include an X-User-Id header so downstream
+# services (a2a, scheduler, etc.) can identify who initiated the MCP call.
+WEKNORA_USER_ID = os.getenv("WEKNORA_USER_ID", "")
 # Chat SSE read timeout in seconds. LLM responses can be slow; default 300s.
 try:
     WEKNORA_CHAT_TIMEOUT = int(os.getenv("WEKNORA_CHAT_TIMEOUT", "300"))
@@ -40,10 +44,11 @@ except ValueError:
 class WeKnoraClient:
     """Client for interacting with WeKnora API"""
 
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(self, base_url: str, api_key: str, user_id: str = ""):
         """Initialize the WeKnora API client with base URL and authentication"""
         self.base_url = base_url
         self.api_key = api_key
+        self.user_id = user_id
         # SSL verification: enabled by default. Set WEKNORA_VERIFY_SSL=false to disable
         # (e.g. for self-signed certs in dev environments — NOT recommended for production).
         self.verify_ssl = os.getenv("WEKNORA_VERIFY_SSL", "true").lower() != "false"
@@ -57,12 +62,16 @@ class WeKnoraClient:
         self.session = requests.Session()
         self.session.verify = self.verify_ssl
         # Set default headers for all requests
-        self.session.headers.update(
-            {
-                "X-API-Key": api_key,  # API key for authentication
-                "Content-Type": "application/json",  # Default content type
-            }
-        )
+        default_headers = {
+            "X-API-Key": api_key,       # API key for authentication
+            "Content-Type": "application/json",  # Default content type
+        }
+        # Attach caller identity header when available so downstream services
+        # (a2a, scheduler) can identify who initiated the MCP tool call.
+        if user_id:
+            default_headers["X-User-Id"] = user_id
+            logger.info("WeKnora MCP server running as user: %s", user_id)
+        self.session.headers.update(default_headers)
 
     def _request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Make a request to the WeKnora API
@@ -488,7 +497,8 @@ class WeKnoraClient:
 # Initialize MCP server instance
 app = Server("weknora-server")
 # Initialize WeKnora API client with configuration
-client = WeKnoraClient(WEKNORA_BASE_URL, WEKNORA_API_KEY)
+# Pass WEKNORA_USER_ID so every outgoing request carries X-User-Id header.
+client = WeKnoraClient(WEKNORA_BASE_URL, WEKNORA_API_KEY, WEKNORA_USER_ID)
 
 
 # Tool definitions - Register all available tools for the MCP protocol
