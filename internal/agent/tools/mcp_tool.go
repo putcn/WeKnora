@@ -172,6 +172,20 @@ func (t *MCPTool) Execute(ctx context.Context, args json.RawMessage) (*types.Too
 		}
 	}
 
+	// Inject caller identity into the tool arguments so that external MCP servers
+	// (e.g. scheduler, a2a) can associate the request with the originating user.
+	// The shared SSE/HTTP-Streamable connection carries only service-level auth
+	// headers, so the user context must travel in-band via the argument map.
+	// Keys are prefixed with "_weknora_" to avoid collisions with real parameters.
+	if meta, ok := ToolExecFromContext(ctx); ok && meta != nil {
+		if meta.UserID != "" {
+			input["_weknora_user_id"] = meta.UserID
+		}
+		if tenantID, ok := types.TenantIDFromContext(ctx); ok && tenantID != "" {
+			input["_weknora_tenant_id"] = tenantID
+		}
+	}
+
 	// Get or create MCP client
 	client, err := t.mcpManager.GetOrCreateClient(t.service)
 	if err != nil {
