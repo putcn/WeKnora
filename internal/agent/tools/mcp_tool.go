@@ -181,7 +181,7 @@ func (t *MCPTool) Execute(ctx context.Context, args json.RawMessage) (*types.Too
 		if meta.UserID != "" {
 			input["_weknora_user_id"] = meta.UserID
 		}
-		if tenantID, ok := types.TenantIDFromContext(ctx); ok && tenantID != "" {
+		if tenantID, ok := types.TenantIDFromContext(ctx); ok && tenantID != 0 {
 			input["_weknora_tenant_id"] = tenantID
 		}
 	}
