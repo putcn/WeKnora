@@ -1,12 +1,14 @@
 <template>
   <teleport to="body">
     <div v-if="drawerVisible && resizable" class="setting-drawer-resize-handle"
-      :class="{ 'setting-drawer-resize-handle--active': drawerResizing }" :style="{ right: `${drawerWidthPx}px` }"
+      :class="{ 'setting-drawer-resize-handle--active': drawerResizing }"
+      :style="{ right: `${drawerWidthPx}px`, '--setting-drawer-travel': `${drawerWidthPx}px` }"
       role="separator" aria-orientation="vertical" @mousedown.prevent="onResizeStart">
       <div class="setting-drawer-resize-line" />
     </div>
   </teleport>
-  <t-drawer v-model:visible="drawerVisible" :size="effectiveWidth" :z-index="2500" placement="right" destroy-on-close
+  <t-drawer v-model:visible="drawerVisible" :size="effectiveWidth" :z-index="2500" placement="right"
+    attach="body" destroy-on-close
     :class="['setting-drawer', { 'setting-drawer--resizing': drawerResizing }]">
     <!--
       Custom header. We replace TDesign's default header so we can put a leading
@@ -420,6 +422,20 @@ const handleCancel = () => {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* The handle is teleported separately from TDesign's sliding panel. Move it
+     along the same path instead of letting it flash at the panel's final left
+     edge while the drawer is still entering from the right. */
+  animation: setting-drawer-resize-handle-in 0.28s cubic-bezier(0.38, 0, 0.24, 1) both;
+}
+
+@keyframes setting-drawer-resize-handle-in {
+  from {
+    transform: translateX(var(--setting-drawer-travel));
+  }
+
+  to {
+    transform: translateX(0);
+  }
 }
 
 .setting-drawer-resize-line {

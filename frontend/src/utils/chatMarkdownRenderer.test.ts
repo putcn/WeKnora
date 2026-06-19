@@ -6,8 +6,14 @@ import {
   preprocessMathDelimiters,
   renderChatMarkdown,
   replaceIncompleteImageWithPlaceholder,
+  stripTrailingStreamingHorizontalRule,
 } from './chatMarkdownRenderer.ts'
-import { resolveCitationChunkId, joinCitationTagsToPreviousLine, collapseStandaloneCitationParagraphs } from './citationMarkdown.ts'
+import {
+  collapseStandaloneCitationParagraphs,
+  joinCitationTagsToPreviousLine,
+  resolveCitationChunkId,
+  stripIncompleteCitationTag,
+} from './citationMarkdown.ts'
 
 const SAMPLE_DOC = 'example-report.docx'
 const SAMPLE_CHUNK_A = '00000001-0000-4000-8000-000000000001'
@@ -27,6 +33,35 @@ test('replaceIncompleteImageWithPlaceholder hides an unfinished streaming image'
     replaceIncompleteImageWithPlaceholder('before ![chart](local://bucket/path'),
     'before <span class="streaming-image-loading"><span class="streaming-image-loading__skeleton"></span></span>',
   )
+})
+
+test('stripIncompleteCitationTag hides only an unfinished streaming citation tail', () => {
+  const prefix = 'Source '
+  const complete = '<kb doc="2.jpg" chunk_id="3c67efd5-f2ff-4e26-9032-9e44e6861178" />'
+
+  for (const partial of ['<', '<k', '<kb', '<kb ', '<kb doc="2.jpg"', '<w', '<we', '<web url="https://example.com"']) {
+    assert.equal(stripIncompleteCitationTag(prefix + partial), prefix)
+  }
+
+  assert.equal(stripIncompleteCitationTag(prefix + complete), prefix + complete)
+  assert.equal(stripIncompleteCitationTag('Value < 5'), 'Value < 5')
+})
+
+test('stripTrailingStreamingHorizontalRule hides an ambiguous trailing rule only mid-stream', () => {
+  for (const rule of ['---', '* * *', '___']) {
+    assert.equal(stripTrailingStreamingHorizontalRule(`- item\n\n${rule}`), '- item\n\n')
+  }
+  assert.equal(stripTrailingStreamingHorizontalRule('- item\n\n---\nnext'), '- item\n\n---\nnext')
+
+  const renderer = createChatMarkdownRenderer()
+  const options = {
+    renderer,
+    escapeMarkdown: (text: string) => text,
+    sanitizeHtml: (html: string) => html,
+  }
+  const source = '- item\n\n---'
+  assert.doesNotMatch(renderChatMarkdown(source, { ...options, streaming: true }), /<hr>/)
+  assert.match(renderChatMarkdown(source, { ...options, streaming: false }), /<hr>/)
 })
 
 test('renderChatMarkdown preserves citations, math, and sanitized output through one shared pipeline', () => {
@@ -167,10 +202,63 @@ test('renderChatMarkdown inlines consecutive citation tags across newlines', () 
   assert.doesNotMatch(html, /<\/p>\s*<p>\s*<span class="citation citation-kb"/)
 })
 
-test('joinCitationTagsToPreviousLine keeps citations on a new line after a list', () => {
-  const tag = '<kb doc="doc.pdf" chunk_id="1" />'
-  const input = `1. first\n2. second\n\n${tag}`
-  assert.equal(joinCitationTagsToPreviousLine(input), `1. first\n2. second\n\n${tag}`)
+test('joinCitationTagsToPreviousLine appends an indented citation to the preceding list item', () => {
+  const tag = '<kb doc="阅读之星全国青少年阅读风采展示活动.pdf" chunk_id="chunk-1" />'
+  const input = [
+    '#### 5️⃣ 阅读之星培养基地',
+    '- 每个组别冠亚季军及前十强所在的学校，将获得 **"阅读之星培养基地"** 奖牌',
+    '',
+    `  ${tag}`,
+  ].join('\n')
+  assert.equal(
+    joinCitationTagsToPreviousLine(input),
+    [
+      '#### 5️⃣ 阅读之星培养基地',
+      `- 每个组别冠亚季军及前十强所在的学校，将获得 **"阅读之星培养基地"** 奖牌 ${tag}`,
+    ].join('\n'),
+  )
+})
+
+test('renderChatMarkdown renders a citation after a list item inline in that item', () => {
+  const renderer = createChatMarkdownRenderer({
+    imageRenderer: ({ href, text }) => `<img src="${href}" alt="${text}">`,
+    isValidImageUrl: () => true,
+  })
+  const tag = '<kb doc="阅读之星全国青少年阅读风采展示活动.pdf" chunk_id="chunk-1" />'
+  const html = renderChatMarkdown(`- 培养基地奖牌\n\n  ${tag}`, {
+    renderer,
+    escapeMarkdown: (text) => text,
+    sanitizeHtml: (value) => value,
+  })
+
+  assert.match(html, /<li>培养基地奖牌 <span class="citation citation-kb"/)
+  assert.doesNotMatch(html, /<\/ul>\s*<p>\s*<span class="citation citation-kb"/)
+})
+
+test('joinCitationTagsToPreviousLine does not merge citations onto fenced code closing delimiter', () => {
+  const tag = '<kb doc="guide.pdf" chunk_id="1" />'
+  const input = '```bash\nunzip setup.zip\n```\n\n' + tag
+  assert.equal(joinCitationTagsToPreviousLine(input), '```bash\nunzip setup.zip\n```\n\n' + tag)
+})
+
+test('renderChatMarkdown keeps fenced code blocks closed when citations follow', () => {
+  const renderer = createChatMarkdownRenderer({
+    imageRenderer: ({ href, text }) => `<img src="${href}" alt="${text}">`,
+    isValidImageUrl: () => true,
+  })
+  const tag = '<kb doc="guide.pdf" chunk_id="1" />'
+  const html = renderChatMarkdown(
+    ['```bash', 'unzip setup.zip', '```', '', tag, '', '#### Next step'].join('\n'),
+    {
+      renderer,
+      escapeMarkdown: (text) => text,
+      sanitizeHtml: (html) => html,
+    },
+  )
+
+  assert.doesNotMatch(html, /#### Next step/)
+  assert.match(html, /<h4>Next step<\/h4>/)
+  assert.equal((html.match(/<pre>/g) || []).length, 1)
 })
 
 test('collapseStandaloneCitationParagraphs merges citations across empty paragraphs', () => {
